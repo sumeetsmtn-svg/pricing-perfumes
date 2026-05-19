@@ -4,9 +4,12 @@ import os
 from playwright.async_api import async_playwright
 import pandas as pd
 
-# Instalación automática del navegador en la nube
-os.system("playwright install chromium")
+# Instalación robusta del navegador usando caché (se ejecuta solo una vez)
+@st.cache_resource
+def install_playwright():
+    os.system("python -m playwright install chromium")
 
+install_playwright()
 st.set_page_config(page_title="Perfume Pricing Hub", page_icon="🛍️", layout="centered")
 
 st.title("🛍️ Perfume Pricing Hub")

@@ -1,49 +1,43 @@
 import streamlit as st
 import asyncio
 import os
-from playwright.async_api import async_playwright
 import pandas as pd
+import requests  # Para conectar con la API de Mercado Libre
 
-# Instalación robusta del navegador
+# Instalación robusta de Playwright en la nube
 @st.cache_resource
 def install_playwright():
     os.system("python -m playwright install chromium")
 
 install_playwright()
 
+from playwright.async_api import async_playwright
+
 st.set_page_config(page_title="Perfume Pricing Hub", page_icon="🛍️", layout="centered")
 st.title("🛍️ Perfume Pricing Hub")
 st.write("Escribe el nombre de un perfume para buscar el precio más bajo.")
 
-async def scrape_mercadolibre(query: str, browser):
-    search_query = query.replace(" ", "-")
-    url = f"https://listado.mercadolibre.cl/{search_query}"
-    
-    # Camuflaje también para Mercado Libre
-    context = await browser.new_context(
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
-    page = await context.new_page()
+async def scrape_mercadolibre(query: str):
+    # API Oficial de Mercado Libre Chile (Estable, rápida y sin bloqueos)
+    url = f"https://api.mercadolibre.com/sites/MLC/search?q={query}&limit=1"
     
     try:
-        # Aumentamos el tiempo a 20 segundos por si la nube está lenta
-        await page.goto(url, timeout=20000)
-        # Selectores más amplios por si Mercado Libre cambió el diseño
-        await page.wait_for_selector('.ui-search-layout__item, .ui-search-result__wrapper', timeout=10000)
+        response = requests.get(url, timeout=10)
+        data = response.json()
         
-        title = await page.locator('.ui-search-item__title').first.inner_text()
-        price_text = await page.locator('.andes-money-amount__fraction').first.inner_text()
-        link = await page.locator('.ui-search-link').first.get_attribute('href')
-        
-        price_int = int(price_text.replace(".", "").strip())
-        await context.close()
-        return {"Marketplace": "Mercado Libre", "Producto": title, "Precio": price_int, "Link": link}
-    
+        if data.get('results'):
+            primer_resultado = data['results'][0]
+            title = primer_resultado['title']
+            price_int = int(primer_resultado['price'])
+            link = primer_resultado['permalink']
+            
+            return {"Marketplace": "Mercado Libre", "Producto": title, "Precio": price_int, "Link": link}
+        else:
+            return {"Marketplace": "Mercado Libre", "Producto": "No encontrado en ML", "Precio": float('inf'), "Link": ""}
+            
     except Exception as e:
-        await context.close()
-        # Capturamos el error real para saber qué está fallando
-        error_corto = str(e).split('\n')[0][:45] 
-        return {"Marketplace": "Mercado Libre", "Producto": f"Error: {error_corto}...", "Precio": float('inf'), "Link": url}
+        error_corto = str(e)[:45]
+        return {"Marketplace": "Mercado Libre", "Producto": f"Error API: {error_corto}", "Precio": float('inf'), "Link": ""}
 
 async def scrape_falabella(query: str, browser):
     search_query = query.replace(" ", "%20")
@@ -69,14 +63,14 @@ async def scrape_falabella(query: str, browser):
     except Exception as e:
         await context.close()
         error_corto = str(e).split('\n')[0][:45]
-        return {"Marketplace": "Falabella", "Producto": f"Error: {error_corto}...", "Precio": float('inf'), "Link": url}
+        return {"Marketplace": "Falabella", "Producto": f"Error Anti-Bot: {error_corto}...", "Precio": float('inf'), "Link": url}
 
 async def run_scrapers(query: str):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         results = await asyncio.gather(
-            scrape_mercadolibre(query, browser),
-            scrape_falabella(query, browser)
+            scrape_mercadolibre(query), # Lógica por API
+            scrape_falabella(query, browser) # Lógica por Navegador
         )
         await browser.close()
         return results
@@ -85,7 +79,7 @@ query = st.text_input("Introduce el perfume a buscar:", placeholder="Ej: Aventus
 
 if st.button("Buscar Precios", type="primary"):
     if query:
-        with st.spinner("Buscando en la nube y evadiendo bloqueos..."):
+        with st.spinner("Buscando en tiempo real..."):
             data = asyncio.run(run_scrapers(query))
             df = pd.DataFrame(data)
             df = df.sort_values(by="Precio")
@@ -93,3 +87,5 @@ if st.button("Buscar Precios", type="primary"):
             
             st.write("### Tabla de Posiciones:")
             st.dataframe(df, column_config={"Link": st.column_config.LinkColumn("Enlace al Producto")}, hide_index=True, use_container_width=True)
+    else:
+        st.warning("Por favor, escribe un perfume antes de buscar.")

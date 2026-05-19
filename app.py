@@ -2,42 +2,55 @@ import streamlit as st
 import asyncio
 import os
 import pandas as pd
-import requests  # Para conectar con la API de Mercado Libre
+import requests
+from bs4 import BeautifulSoup
+from playwright.async_api import async_playwright
 
-# Instalación robusta de Playwright en la nube
+# Instalación robusta de Playwright en la nube (lo mantenemos para Falabella)
 @st.cache_resource
 def install_playwright():
     os.system("python -m playwright install chromium")
 
 install_playwright()
 
-from playwright.async_api import async_playwright
-
 st.set_page_config(page_title="Perfume Pricing Hub", page_icon="🛍️", layout="centered")
 st.title("🛍️ Perfume Pricing Hub")
 st.write("Escribe el nombre de un perfume para buscar el precio más bajo.")
 
 async def scrape_mercadolibre(query: str):
-    # API Oficial de Mercado Libre Chile (Estable, rápida y sin bloqueos)
-    url = f"https://api.mercadolibre.com/sites/MLC/search?q={query}&limit=1"
+    # Formatear la búsqueda para la web
+    search_query = query.replace(" ", "-")
+    url = f"https://listado.mercadolibre.cl/{search_query}"
+    
+    # Camuflaje: Hacemos creer a ML que somos un navegador de Windows normal
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     
     try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
+        # Usamos requests para bajar el HTML directo (¡Súper rápido!)
+        response = requests.get(url, headers=headers, timeout=10)
+        # BeautifulSoup transforma ese texto en algo fácil de leer
+        soup = BeautifulSoup(response.text, 'html.parser')
         
-        if data.get('results'):
-            primer_resultado = data['results'][0]
-            title = primer_resultado['title']
-            price_int = int(primer_resultado['price'])
-            link = primer_resultado['permalink']
+        # Buscamos dónde está el título, precio y link usando sus selectores
+        titulo_el = soup.select_one('.ui-search-item__title')
+        precio_el = soup.select_one('.andes-money-amount__fraction')
+        link_el = soup.select_one('.ui-search-link')
+        
+        if titulo_el and precio_el and link_el:
+            title = titulo_el.text.strip()
+            price_text = precio_el.text.replace(".", "").strip()
+            price_int = int(price_text)
+            link = link_el.get('href')
             
             return {"Marketplace": "Mercado Libre", "Producto": title, "Precio": price_int, "Link": link}
         else:
-            return {"Marketplace": "Mercado Libre", "Producto": "No encontrado en ML", "Precio": float('inf'), "Link": ""}
+            return {"Marketplace": "Mercado Libre", "Producto": "No se encontraron resultados", "Precio": float('inf'), "Link": url}
             
     except Exception as e:
         error_corto = str(e)[:45]
-        return {"Marketplace": "Mercado Libre", "Producto": f"Error API: {error_corto}", "Precio": float('inf'), "Link": ""}
+        return {"Marketplace": "Mercado Libre", "Producto": f"Error Request: {error_corto}", "Precio": float('inf'), "Link": ""}
 
 async def scrape_falabella(query: str, browser):
     search_query = query.replace(" ", "%20")
@@ -69,8 +82,8 @@ async def run_scrapers(query: str):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         results = await asyncio.gather(
-            scrape_mercadolibre(query), # Lógica por API
-            scrape_falabella(query, browser) # Lógica por Navegador
+            scrape_mercadolibre(query),
+            scrape_falabella(query, browser)
         )
         await browser.close()
         return results
